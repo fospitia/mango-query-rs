@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mango-query-rs = { path = "../mango-query-rs" } # or adjust the path/registry accordingly
+mango-query-rs = { path = "../mango-query-rs", features = ["dynamodb"] } # Enable "dynamodb" feature if using DynamoDB compiler
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ```
@@ -113,24 +113,52 @@ fn main() {
 Translate your Mango queries into database-specific filter formats.
 
 ### 1. DynamoDB Flavour
-Compiles queries to AWS SDK-compliant expressions. Attribute names and values are automatically assigned safe placeholders to prevent collisions with reserved DynamoDB keywords. Nested paths (e.g., `imdb.rating`) translate correctly.
+> [!NOTE]
+> Requires the `dynamodb` feature flag to be enabled.
+
+Compiles queries to AWS SDK-compliant expressions. Output fields (`filter_expression`, `expression_attribute_names`, and `expression_attribute_values`) are wrapped in `Option`, returning `None` if they are empty. It also includes the `key_condition` string field, `index_name: Option<String>` (representing the index resolved from the query's `use_index` property), `exclusive_start_key: Option<HashMap<String, AttributeValue>>` (resolved and parsed from the query's base64-encoded `bookmark` property), and `limit: Option<i32>` (representing the query's execution limit).
+
+You can pass an optional `DynamoDBConfig` to the compiler containing:
+- `key_condition`: An initial key condition string.
+- `attribute_names`: Initial attribute name placeholders.
+- `attribute_values`: Initial attribute value placeholders as a `HashMap<String, AttributeValue>`.
+
+The compiler will automatically merge the configuration's names and values with the placeholders generated during query compilation.
 
 ```rust
-use mango_query_rs::{DynamoDBCompiler, FlavourCompiler, MangoQueryBuilder};
+use aws_sdk_dynamodb::types::AttributeValue;
+use mango_query_rs::{DynamoDBCompiler, DynamoDBConfig, FlavourCompiler, MangoQueryBuilder};
 use serde_json::json;
+use std::collections::HashMap;
 
 fn main() {
     let query = MangoQueryBuilder::new()
         .r#where("status", json!("active"))
-        .r#where("imdb.rating", json!({ "$gte": 8 }))
         .build();
+
+    let mut attribute_names = HashMap::new();
+    attribute_names.insert("#initial_name".to_string(), "initial_val".to_string());
+
+    let mut attribute_values = HashMap::new();
+    attribute_values.insert(
+        ":initial_value".to_string(),
+        AttributeValue::S("initial".to_string()),
+    );
+
+    let config = DynamoDBConfig {
+        key_condition: "pk = :pk_val".to_string(),
+        attribute_names,
+        attribute_values,
+    };
 
     let compiler = DynamoDBCompiler::new();
     let query_val = serde_json::to_value(&query).unwrap();
-    let result = compiler.compile(&query_val, None).unwrap();
+    let result = compiler.compile(&query_val, Some(config)).unwrap();
 
-    println!("Filter: {}", result.filter_expression);
-    // Filter: #attr_status = :val_0 AND #attr_imdb.#attr_rating >= :val_1
+    println!("Key Condition: {}", result.key_condition);
+    // Key Condition: pk = :pk_val
+    println!("Filter: {}", result.filter_expression.unwrap());
+    // Filter: #attr_status = :val_0
 }
 ```
 

@@ -5,7 +5,8 @@ pub mod models;
 
 // Re-exports
 pub use builder::MangoQueryBuilder;
-pub use flavours::dynamodb::{DynamoDBCompiler, DynamoDBFilterOutput};
+#[cfg(feature = "dynamodb")]
+pub use flavours::dynamodb::{DynamoDBCompiler, DynamoDBConfig, DynamoDBFilterOutput};
 pub use flavours::postgresql::{
     PostgreSQLCompiler, PostgreSQLConfig, PostgreSQLFilterOutput, PostgresColumnConfig,
     PostgresJoinConfig,

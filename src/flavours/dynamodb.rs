@@ -1,11 +1,24 @@
 use crate::flavours::types::FlavourCompiler;
+use aws_sdk_dynamodb::types::AttributeValue;
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DynamoDBConfig {
+    pub key_condition: String,
+    pub attribute_names: HashMap<String, String>,
+    pub attribute_values: HashMap<String, AttributeValue>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DynamoDBFilterOutput {
-    pub filter_expression: String,
-    pub expression_attribute_names: HashMap<String, String>,
-    pub expression_attribute_values: HashMap<String, Value>,
+    pub key_condition: String,
+    pub index_name: Option<String>,
+    pub filter_expression: Option<String>,
+    pub expression_attribute_names: Option<HashMap<String, String>>,
+    pub expression_attribute_values: Option<HashMap<String, AttributeValue>>,
+    pub exclusive_start_key: Option<HashMap<String, AttributeValue>>,
+    pub limit: Option<i32>,
 }
 
 pub struct DynamoDBCompiler;
@@ -18,7 +31,7 @@ impl Default for DynamoDBCompiler {
 
 struct CompilationContext {
     attribute_names: HashMap<String, String>,
-    attribute_values: HashMap<String, Value>,
+    attribute_values: HashMap<String, AttributeValue>,
     value_counter: usize,
 }
 
@@ -49,10 +62,33 @@ fn get_attribute_name_placeholder(path: &str, context: &mut CompilationContext) 
     placeholders.join(".")
 }
 
+fn json_to_attribute_value(val: Value) -> AttributeValue {
+    match val {
+        Value::Null => AttributeValue::Null(true),
+        Value::Bool(b) => AttributeValue::Bool(b),
+        Value::Number(n) => AttributeValue::N(n.to_string()),
+        Value::String(s) => AttributeValue::S(s),
+        Value::Array(arr) => {
+            let list = arr.into_iter().map(json_to_attribute_value).collect();
+            AttributeValue::L(list)
+        }
+        Value::Object(map) => {
+            let m = map
+                .into_iter()
+                .map(|(k, v)| (k, json_to_attribute_value(v)))
+                .collect();
+            AttributeValue::M(m)
+        }
+    }
+}
+
 fn get_value_placeholder(value: Value, context: &mut CompilationContext) -> String {
     let placeholder = format!(":val_{}", context.value_counter);
     context.value_counter += 1;
-    context.attribute_values.insert(placeholder.clone(), value);
+    let attr_val = json_to_attribute_value(value);
+    context
+        .attribute_values
+        .insert(placeholder.clone(), attr_val);
     placeholder
 }
 
@@ -287,13 +323,19 @@ impl DynamoDBCompiler {
     }
 }
 
-impl FlavourCompiler<DynamoDBFilterOutput, ()> for DynamoDBCompiler {
-    fn compile(&self, query: &Value, _config: Option<()>) -> Result<DynamoDBFilterOutput, String> {
+impl FlavourCompiler<DynamoDBFilterOutput, DynamoDBConfig> for DynamoDBCompiler {
+    fn compile(
+        &self,
+        query: &Value,
+        config: Option<DynamoDBConfig>,
+    ) -> Result<DynamoDBFilterOutput, String> {
         let selector = if let Some(sel) = query.get("selector") {
             sel
         } else {
             query
         };
+
+        let conf = config.unwrap_or_default();
 
         let mut context = CompilationContext {
             attribute_names: HashMap::new(),
@@ -302,11 +344,69 @@ impl FlavourCompiler<DynamoDBFilterOutput, ()> for DynamoDBCompiler {
         };
 
         let filter_expression = self.compile_selector(selector, &mut context)?;
+        let filter_expression = if filter_expression.is_empty() {
+            None
+        } else {
+            Some(filter_expression)
+        };
+
+        let mut final_attribute_names = conf.attribute_names;
+        final_attribute_names.extend(context.attribute_names);
+        let expression_attribute_names = if final_attribute_names.is_empty() {
+            None
+        } else {
+            Some(final_attribute_names)
+        };
+
+        let mut final_attribute_values = conf.attribute_values;
+        final_attribute_values.extend(context.attribute_values);
+        let expression_attribute_values = if final_attribute_values.is_empty() {
+            None
+        } else {
+            Some(final_attribute_values)
+        };
+
+        let index_name = query.get("use_index").and_then(|val| match val {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(arr) => {
+                if !arr.is_empty() {
+                    arr[0].as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        });
+
+        let exclusive_start_key =
+            query
+                .get("bookmark")
+                .and_then(|v| v.as_str())
+                .and_then(|bmark| {
+                    if bmark.is_empty() {
+                        None
+                    } else {
+                        use base64::{Engine as _, engine::general_purpose::STANDARD};
+                        let decoded_bytes = STANDARD.decode(bmark).ok()?;
+                        let json_val: serde_json::Value =
+                            serde_json::from_slice(&decoded_bytes).ok()?;
+                        serde_dynamo::to_item(json_val).ok()
+                    }
+                });
+
+        let limit = query
+            .get("limit")
+            .and_then(|val| val.as_i64())
+            .map(|n| n as i32);
 
         Ok(DynamoDBFilterOutput {
+            key_condition: conf.key_condition,
+            index_name,
             filter_expression,
-            expression_attribute_names: context.attribute_names,
-            expression_attribute_values: context.attribute_values,
+            expression_attribute_names,
+            expression_attribute_values,
+            exclusive_start_key,
+            limit,
         })
     }
 }
