@@ -15,7 +15,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mango-query-rs = { path = "../mango-query-rs", features = ["dynamodb"] } # Enable "dynamodb" feature if using DynamoDB compiler
+mango-query-rs = { version = "0.1.0", features = ["dynamodb"] } # Enable "dynamodb" feature if using DynamoDB compiler
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ```
