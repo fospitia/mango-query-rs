@@ -2,6 +2,14 @@
 name = "mango-query-rs"
 version = "0.1.0"
 edition = "2024"
+description = "A CouchDB Mango query builder, compiler for DynamoDB/PostgreSQL, and in-memory filter in Rust"
+license = "Apache-2.0"
+repository = "https://github.com/fospitia/mango-query-rs"
+homepage = "https://github.com/fospitia/mango-query-rs"
+documentation = "https://docs.rs/mango-query-rs"
+readme = "README.md"
+keywords = ["couchdb", "mango", "query-builder", "dynamodb", "postgres"]
+categories = ["database", "parser-implementations", "rust-patterns"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
